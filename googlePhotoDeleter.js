@@ -487,25 +487,38 @@ function nudgeLastPhotoIntoFocus() {
 }
 
 function updateHydrationDirection(scroller) {
-    if (scroller === window) {
-        return;
-    }
-
     if (isNearBottom(scroller)) {
         hydrationDirection = -1;
-    }
-
-    if (isNearTop(scroller)) {
+    } else if (isNearTop(scroller)) {
         hydrationDirection = 1;
     }
 }
 
 function isNearBottom(scroller) {
+    if (scroller === window) {
+        const metrics = getWindowScrollMetrics();
+        return metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - 100;
+    }
+
     return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 100;
 }
 
 function isNearTop(scroller) {
+    if (scroller === window) {
+        const metrics = getWindowScrollMetrics();
+        return metrics.scrollTop <= 100;
+    }
+
     return scroller.scrollTop <= 100;
+}
+
+function getWindowScrollMetrics() {
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    return {
+        scrollTop: window.scrollY,
+        clientHeight: window.innerHeight,
+        scrollHeight: scrollingElement.scrollHeight
+    };
 }
 
 function hydrationWheelTarget(scroller) {
