@@ -29,6 +29,9 @@ const CONFIG = {
     backoff: {
         baseUnit: 120000,
         maxCap: 900000
+    },
+    batch: {
+        maxSize: 50
     }
 };
 
@@ -159,7 +162,7 @@ function getAvailablePhotoLinks() {
 }
 
 function chooseBatchCandidates(availableLinks) {
-    const maxBatchSize = 50;
+    const maxBatchSize = CONFIG.batch.maxSize;
     writeToTerminal(`[Batch] Aggregating ${maxBatchSize} random photo target matrices...`, '#9aa0a6');
     const randomizedLinks = availableLinks.sort(compareRandomly);
     return randomizedLinks.slice(0, maxBatchSize);
@@ -689,6 +692,7 @@ function createDashboardContainer() {
 function dashboardSections() {
     return [
         createDashboardTitle(),
+        createConfigPanel(),
         createStopButton(),
         createMetricsPanel(),
         createLedgerHeader(),
@@ -710,6 +714,155 @@ function createDashboardTitle() {
         style: titleStyle,
         text: 'Google Photos Robust Bulk Deleter'
     });
+}
+
+function createConfigPanel() {
+    const panelStyle = joinCssRules([
+        'background:#292a2d',
+        'padding:10px 12px',
+        'border-radius:8px',
+        'border:1px solid #5f6368',
+        'margin-bottom:15px'
+    ]);
+    const panel = createElement('div', { style: panelStyle });
+    const header = createConfigPanelHeader();
+    const grid = createConfigFieldGrid();
+    appendChildren(panel, [header, grid]);
+    return panel;
+}
+
+function createConfigPanelHeader() {
+    const headerStyle = joinCssRules([
+        'font-weight:bold',
+        'margin-bottom:8px',
+        'color:#9aa0a6',
+        'text-transform:uppercase',
+        'font-size:11px',
+        'letter-spacing:0.5px'
+    ]);
+    return createElement('div', {
+        style: headerStyle,
+        text: 'Live Configuration'
+    });
+}
+
+function createConfigFieldGrid() {
+    const gridStyle = joinCssRules([
+        'display:grid',
+        'grid-template-columns:1fr 1fr',
+        'gap:6px 12px'
+    ]);
+    const grid = createElement('div', { style: gridStyle });
+    appendChildren(grid, buildConfigFieldElements());
+    return grid;
+}
+
+function buildConfigFieldElements() {
+    return configFieldDefinitions().map((field) => createConfigFieldCell(field));
+}
+
+function configFieldDefinitions() {
+    return [
+        {
+            label: 'Post-Click Delay (ms)',
+            group: 'delays',
+            key: 'postClick',
+            min: 0
+        },
+        {
+            label: 'Modal Wait (ms)',
+            group: 'delays',
+            key: 'modalWait',
+            min: 0
+        },
+        {
+            label: 'Scroll Wait (ms)',
+            group: 'delays',
+            key: 'scrollWait',
+            min: 0
+        },
+        {
+            label: 'Network Cooldown (ms)',
+            group: 'delays',
+            key: 'networkCooldown',
+            min: 0
+        },
+        {
+            label: 'Backoff Base Unit (ms)',
+            group: 'backoff',
+            key: 'baseUnit',
+            min: 1000
+        },
+        {
+            label: 'Backoff Max Cap (ms)',
+            group: 'backoff',
+            key: 'maxCap',
+            min: 1000
+        },
+        {
+            label: 'Max Batch Size',
+            group: 'batch',
+            key: 'maxSize',
+            min: 1
+        }
+    ];
+}
+
+function createConfigFieldCell(field) {
+    const cellStyle = joinCssRules([
+        'display:flex',
+        'flex-direction:column',
+        'gap:2px'
+    ]);
+    const cell = createElement('div', { style: cellStyle });
+    const label = createConfigFieldLabel(field.label);
+    const input = createConfigFieldInput(field);
+    appendChildren(cell, [label, input]);
+    return cell;
+}
+
+function createConfigFieldLabel(text) {
+    const labelStyle = joinCssRules([
+        'font-size:10px',
+        'color:#9aa0a6',
+        'text-transform:uppercase',
+        'letter-spacing:0.3px'
+    ]);
+    return createElement('div', {
+        style: labelStyle,
+        text
+    });
+}
+
+function createConfigFieldInput(field) {
+    const inputStyle = joinCssRules([
+        'background:#171717',
+        'border:1px solid #3c4043',
+        'border-radius:4px',
+        'color:#e8eaed',
+        'font-size:12px',
+        'padding:4px 6px',
+        'width:100%',
+        'box-sizing:border-box',
+        'font-family:monospace'
+    ]);
+    const input = createElement('input', { style: inputStyle });
+    input.type = 'number';
+    input.min = String(field.min);
+    input.value = String(CONFIG[field.group][field.key]);
+    input.oninput = () => applyConfigFieldChange(input, field);
+    return input;
+}
+
+function applyConfigFieldChange(input, field) {
+    const parsed = parseInt(input.value, 10);
+    const isValid = !isNaN(parsed) && parsed >= field.min;
+    if (isValid) {
+        CONFIG[field.group][field.key] = parsed;
+        input.style.borderColor = '#3c4043';
+    } else {
+        input.style.borderColor = '#ff3333';
+    }
 }
 
 function createStopButton() {
