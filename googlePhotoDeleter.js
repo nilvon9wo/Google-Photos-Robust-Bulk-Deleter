@@ -8,6 +8,7 @@ let currentStatusText = "Initializing...";
 let countdownIntervalTimer = null;
 let globalSequenceId = 0;
 let hydrationDirection = 1;
+let wakeLockSentinel = null;
 
 const CONFIG = {
     selectors: {
@@ -56,6 +57,46 @@ async function initializeRun() {
     updateStatus('Configuring Viewport...');
     await optimizeZoom();
     forceDeselectAllCurrent();
+    await acquireWakeLock();
+    installVisibilityChangeHandler();
+}
+
+async function acquireWakeLock() {
+    if (!wakeLockIsSupported()) {
+        writeToTerminal('⚠️ Wake Lock API unavailable — computer may sleep during long runs.', '#fcb714');
+        return;
+    }
+
+    try {
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+        wakeLockSentinel.addEventListener('release', onWakeLockReleased);
+        writeToTerminal('☀️ Wake lock acquired. Computer will stay awake.', '#81c995');
+    } catch (err) {
+        writeToTerminal(`⚠️ Wake lock request failed: ${err.message}`, '#fcb714');
+    }
+}
+
+function wakeLockIsSupported() {
+    return 'wakeLock' in navigator;
+}
+
+function onWakeLockReleased() {
+    wakeLockSentinel = null;
+    writeToTerminal('⚠️ Wake lock released (tab hidden). Will re-acquire when visible.', '#fcb714');
+}
+
+function installVisibilityChangeHandler() {
+    document.addEventListener('visibilitychange', onPageVisibilityChanged);
+}
+
+async function onPageVisibilityChanged() {
+    const isVisible = document.visibilityState === 'visible';
+    const isRunning = !window.STOP_AUTOMATION;
+    const needsWakeLock = !wakeLockSentinel;
+
+    if (isVisible && isRunning && needsWakeLock) {
+        await acquireWakeLock();
+    }
 }
 
 async function processSingleCycle() {
@@ -486,9 +527,21 @@ function scrollHydrationContainer(scroller, delta) {
 function cleanupAfterStop() {
     clearInterval(countdownIntervalTimer);
     hideCooldownPanel();
+    releaseWakeLock();
+    document.removeEventListener('visibilitychange', onPageVisibilityChanged);
     window.removeEventListener('resize', applyZoomCompensation);
     updateStatus('Terminated.');
     writeToTerminal(`🏁 Engine halted cleanly. Session run summary: ${totalDeleted} deleted files.`, '#81c995', true);
+}
+
+async function releaseWakeLock() {
+    if (!wakeLockSentinel) {
+        return;
+    }
+
+    await wakeLockSentinel.release();
+    wakeLockSentinel = null;
+    writeToTerminal('Wake lock released cleanly on stop.', '#9aa0a6');
 }
 
 function hideCooldownPanel() {

@@ -34,6 +34,7 @@ So this script was built and iterated specifically to keep working in hostile re
 - Recovers automatically after cooldown and continues.
 - Periodically re-hydrates the viewport (scroll/navigation nudges) to force lazy-loaded content to appear.
 - Removes certain UI lock attributes (aria-hidden/inert) that can block interaction.
+- Requests a Screen Wake Lock so the computer does not fall asleep during long unattended runs.
 
 ## Feature Details
 
@@ -89,6 +90,16 @@ After submit, the script waits for ongoing movement indicators to clear before c
 ### 6) Layout Hydration / Discovery Movement
 
 The script forces controlled scrolling and directional reversal near top/bottom boundaries to keep lazy-loaded content flowing into the DOM.
+
+### 7) Screen Wake Lock
+
+The script requests a Screen Wake Lock via the standard W3C `navigator.wakeLock` API (available in Chrome 84+). This prevents the operating system from sleeping the display during long unattended runs — no separate utility or YouTube video required.
+
+- The lock is acquired at startup and released cleanly when you click STOP AUTOMATION.
+- If the browser auto-releases the lock because the tab becomes hidden (e.g., you minimize the window), the script detects this and re-acquires the lock automatically when the tab becomes visible again.
+- If the API is unavailable (older browser, or a plain HTTP page), a warning is logged to the HUD terminal and the script continues without it.
+
+Note: the lock is tied to the tab being *visible*, not just open. Switching to another browser window is fine. Minimizing the Google Photos window will release the lock until you restore it.
 
 ## Safety, Behavior, and Limits
 
@@ -177,6 +188,9 @@ These are per-item ledger states and help diagnose what happened during each bat
 
 - Script appears idle:
 - It may be in sync wait mode or hydration wait mode; check status and terminal panel.
+
+- Wake lock warning appears in the HUD terminal:
+- Your browser does not support the Screen Wake Lock API, or the page is served over plain HTTP instead of HTTPS. Use a current version of Chrome and ensure the page URL begins with `https://`. As a fallback, keep a video playing in another tab to prevent system sleep.
 
 - Never starts deleting files or strange errors:
 - Something may be full or corrupt in the Google Photos single page application.  To fix:
