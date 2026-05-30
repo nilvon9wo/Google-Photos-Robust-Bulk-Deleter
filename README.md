@@ -178,6 +178,12 @@ These are per-item ledger states and help diagnose what happened during each bat
 - Script appears idle:
 - It may be in sync wait mode or hydration wait mode; check status and terminal panel.
 
+- Never starts deleting files or strange errors:
+- Something may be full or corrupt in the Google Photos single page application.  To fix:
+    1. In your browser's developer's tools, click "Application" -> "Clear site data".
+    2. Use Clear Cache browser extension to clear the cache; or
+    3. Reload the page.
+
 ## Disclaimer
 
 Use at your own risk. You are responsible for what account and content this runs against. Always test with a small sample before long unattended runs.
