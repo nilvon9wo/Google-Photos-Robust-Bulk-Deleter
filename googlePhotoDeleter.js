@@ -6,6 +6,8 @@ let countdownIntervalTimer = null;
 let currentStatusText = "Initializing...";
 let deltaY = 2500;
 let globalSequenceId = 0;
+let syncSkipRequested = false;
+let syncNeverWait = false;
 let serverThrottledDelay = 0;
 let totalDeleted = 0;
 let wakeLockSentinel = null;
@@ -420,12 +422,18 @@ function markBatchAsContextSplit(trackingIds) {
 }
 
 async function waitForAsyncMovementToComplete(batchTrackingIds) {
+    if (syncNeverWait) {
+        writeToTerminal('[Sync] "Never wait" enabled. Skipping movement wait gate for this cycle.', '#fcb714');
+        return;
+    }
+
     updateStatus('Syncing with Cloud...');
     const initialBreather = Math.max(3000, batchTrackingIds.length * 150);
     const breatherSeconds = (initialBreather / 1000).toFixed(1);
     const syncMessage = `[Sync] Relinquishing pipeline execution for ${breatherSeconds}s to let handoff complete...`;
     writeToTerminal(syncMessage, '#8ab4f8');
     await sleep(initialBreather);
+    writeToTerminal('[Sync] Relinquish window elapsed. Entering cloud movement scan gate...', '#8ab4f8');
     await runSyncGate(batchTrackingIds);
 }
 
@@ -433,19 +441,36 @@ async function runSyncGate(batchTrackingIds) {
     const startTime = Date.now();
     const hardMaxTimeoutMs = 1200000;
     let consecutiveClearScans = 0;
+    syncSkipRequested = false;
+    setSyncWaitUiState(true, 3);
 
-    while (Date.now() - startTime < hardMaxTimeoutMs) {
-        const result = await runSingleSyncScan(batchTrackingIds, startTime, consecutiveClearScans);
+    try {
+        while (Date.now() - startTime < hardMaxTimeoutMs) {
+            if (syncSkipRequested) {
+                writeToTerminal('[Sync] Skip requested by user. Exiting wait gate for this cycle.', '#fcb714', true);
+                return;
+            }
 
-        if (result.exit) {
-            return;
+            if (syncNeverWait) {
+                writeToTerminal('[Sync] "Never wait" enabled during active cycle. Exiting wait gate.', '#fcb714', true);
+                return;
+            }
+
+            setSyncWaitUiState(true, Math.max(1, 3 - consecutiveClearScans));
+            const result = await runSingleSyncScan(batchTrackingIds, startTime, consecutiveClearScans);
+
+            if (result.exit) {
+                return;
+            }
+
+            consecutiveClearScans = result.consecutiveClearScans;
         }
 
-        consecutiveClearScans = result.consecutiveClearScans;
+        writeToTerminal('🛑 Timeout limit breached while awaiting transaction stack fulfillment.', '#ff3333', true);
+        markBatchAsCeilingBroken(batchTrackingIds);
+    } finally {
+        setSyncWaitUiState(false, 0);
     }
-
-    writeToTerminal('🛑 Timeout limit breached while awaiting transaction stack fulfillment.', '#ff3333', true);
-    markBatchAsCeilingBroken(batchTrackingIds);
 }
 
 async function runSingleSyncScan(batchTrackingIds, startTime, consecutiveClearScans) {
@@ -494,6 +519,7 @@ async function handleActiveSync(startTime) {
 
 async function handleClearSync(consecutiveClearScans) {
     const updatedClearScans = consecutiveClearScans + 1;
+    writeToTerminal(`[Sync] Movement text absent. Clean scan ${updatedClearScans}/3.`, '#8ab4f8');
 
     if (updatedClearScans < 3) {
         return waitForMoreClearScans(updatedClearScans);
@@ -966,8 +992,90 @@ function createMetricsPanel() {
         'margin-bottom:15px'
     ]);
     const panel = createElement('div', { style: panelStyle });
-    appendChildren(panel, [createStatusRow(), createTotalPurgedRow(), createCooldownPanel()]);
+    appendChildren(panel, [
+        createTotalPurgedRow(),
+        createStatusRow(),
+        createSyncWaitControlRow(),
+        createCooldownPanel()
+    ]);
     return panel;
+}
+
+function createSyncWaitControlRow() {
+    const row = createElement('div', {
+        id: 'hud-sync-wait-controls',
+        style: 'margin-top:8px;margin-bottom:6px;display:flex;align-items:center;gap:10px;'
+    });
+
+    const skipButton = createElement('button', {
+        id: 'hud-sync-skip-btn',
+        text: 'Skip 3 Moving Statements',
+        style: joinCssRules([
+            'display:none',
+            'background:#fcb714',
+            'color:#202124',
+            'border:none',
+            'border-radius:6px',
+            'padding:12px',
+            'font-size:11px',
+            'font-weight:bold',
+            'cursor:pointer'
+        ])
+    });
+    skipButton.onclick = handleSyncSkipButtonPressed;
+
+    const neverWaitWrap = createElement('label', {
+        style: 'display:flex;align-items:center;gap:6px;font-size:16px;color:#fcb714;cursor:pointer;user-select:none;'
+    });
+
+    const neverWaitCheckbox = document.createElement('input');
+    neverWaitCheckbox.id = 'hud-sync-neverwait-checkbox';
+    neverWaitCheckbox.type = 'checkbox';
+    neverWaitCheckbox.checked = false;
+    neverWaitCheckbox.onchange = handleSyncNeverWaitToggled;
+
+    const neverWaitText = createElement('span', {
+        text: 'Never wait'
+    });
+
+    appendChildren(neverWaitWrap, [neverWaitCheckbox, neverWaitText]);
+    appendChildren(row, [skipButton, neverWaitWrap]);
+    return row;
+}
+
+function setSyncWaitUiState(isActive, remainingStatements) {
+    const skipButton = document.getElementById('hud-sync-skip-btn');
+
+    if (!skipButton) {
+        return;
+    }
+
+    if (!isActive) {
+        skipButton.style.display = 'none';
+        skipButton.disabled = true;
+        return;
+    }
+
+    const remaining = Math.max(1, remainingStatements || 3);
+    skipButton.textContent = `Skip ${remaining} Moving Statements`;
+    skipButton.style.display = 'inline-block';
+    skipButton.disabled = false;
+}
+
+function handleSyncSkipButtonPressed() {
+    syncSkipRequested = true;
+    writeToTerminal('[Sync] Skip button pressed. Current wait cycle will be bypassed.', '#fcb714');
+}
+
+function handleSyncNeverWaitToggled(event) {
+    syncNeverWait = !!event.target.checked;
+    if (syncNeverWait) {
+        syncSkipRequested = true;
+        writeToTerminal('[Sync] "Never wait" enabled. Future cycles will bypass wait gate.', '#fcb714', true);
+        return;
+    }
+
+    writeToTerminal('[Sync] "Never wait" disabled. Wait gate restored for future cycles.', '#9aa0a6');
 }
 
 function createStatusRow() {
