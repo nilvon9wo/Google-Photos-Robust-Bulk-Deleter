@@ -9,6 +9,8 @@ let globalSequenceId = 0;
 let syncSkipRequested = false;
 let syncNeverWait = false;
 let serverThrottledDelay = 0;
+let totalFilesEstimate = null;
+let totalFilesEstimateIsHeuristic = false;
 let totalDeleted = 0;
 let wakeLockSentinel = null;
 
@@ -95,6 +97,7 @@ async function start() {
 async function initializeRun() {
     resetRunState();
     setupDashboardUI();
+    tryCaptureTotalFilesEstimate();
     writeToTerminal('🚀 Initializing Wide-Chassis Normalized Automation System...', '#8ab4f8', true);
     updateStatus('Configuring Viewport...');
     await optimizeZoom();
@@ -1142,12 +1145,31 @@ function createStatusRow() {
 function createTotalPurgedRow() {
     const row = createElement('div', { style: 'margin-bottom:6px;' });
     const countLabel = createElement('strong', { text: 'Total Files Purged: ' });
-    const counterStyle = joinCssRules(['color:#81c995', 'font-weight:bold']);
     const countValue = createElement('span', {
         id: 'hud-total-counter',
-        style: counterStyle,
+        style: 'font-weight:bold;'
+    });
+    const purgedValue = createElement('span', {
+        id: 'hud-total-counter-purged',
+        style: 'color:#81c995;',
         text: '0'
     });
+    const separator = createElement('span', {
+        id: 'hud-total-counter-separator',
+        style: 'color:#9aa0a6;',
+        text: ' / '
+    });
+    const totalValue = createElement('span', {
+        id: 'hud-total-counter-total',
+        style: 'color:#ff6d6d;',
+        text: '?'
+    });
+    const estimateQualifier = createElement('span', {
+        id: 'hud-total-counter-total-qualifier',
+        style: 'color:#fcb714;font-size:10px;font-weight:normal;',
+        text: ''
+    });
+    appendChildren(countValue, [purgedValue, separator, totalValue, estimateQualifier]);
     appendChildren(row, [countLabel, countValue]);
     return row;
 }
@@ -1401,11 +1423,96 @@ function updateStatus(statusText) {
 }
 
 function updatePurgeCount(newCount) {
-    const counterElement = document.getElementById('hud-total-counter');
+    const purgedElement = document.getElementById('hud-total-counter-purged');
+    const totalElement = document.getElementById('hud-total-counter-total');
+    const qualifierElement = document.getElementById('hud-total-counter-total-qualifier');
 
-    if (counterElement) {
-        counterElement.textContent = newCount;
+    if (totalFilesEstimate === null) {
+        tryCaptureTotalFilesEstimate();
     }
+
+    if (purgedElement) {
+        purgedElement.textContent = String(newCount);
+    }
+
+    if (totalElement) {
+        totalElement.textContent = totalFilesEstimate !== null
+            ? String(totalFilesEstimate)
+            : '?';
+    }
+
+    if (qualifierElement) {
+        qualifierElement.textContent = (totalFilesEstimate !== null && totalFilesEstimateIsHeuristic)
+            ? ' (est)'
+            : '';
+    }
+}
+
+function tryCaptureTotalFilesEstimate() {
+    const detected = detectTotalFilesEstimate();
+
+    if (detected === null || detected <= 0) {
+        return;
+    }
+
+    if (totalFilesEstimate === detected) {
+        return;
+    }
+
+    totalFilesEstimate = detected;
+    totalFilesEstimateIsHeuristic = true;
+    writeToTerminal(`[Init] Detected total file count: ${totalFilesEstimate}`, '#9aa0a6');
+}
+
+function detectTotalFilesEstimate() {
+    const snippets = [];
+    snippets.push(document.title || '');
+
+    const selectors = [
+        'h1',
+        'h2',
+        '[aria-label*="photos" i]',
+        '[aria-label*="items" i]',
+        '[role="heading"]'
+    ];
+
+    selectors.forEach((selector) => {
+        const nodes = Array.from(document.querySelectorAll(selector)).slice(0, 12);
+        nodes.forEach((node) => {
+            snippets.push(node.textContent || '');
+            snippets.push(node.getAttribute('aria-label') || '');
+        });
+    });
+
+    const totals = snippets
+        .map(extractCountFromText)
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+    if (totals.length === 0) {
+        return null;
+    }
+
+    return Math.max(...totals);
+}
+
+function extractCountFromText(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+
+    if (!normalized) {
+        return null;
+    }
+
+    const exactMatch = normalized.match(/(\d[\d,]*)\s*(photos?|items?)\b/i);
+    if (exactMatch) {
+        return parseInt(exactMatch[1].replace(/,/g, ''), 10);
+    }
+
+    const compactMatch = normalized.match(/(\d[\d,]*)\s*$/);
+    if (compactMatch) {
+        return parseInt(compactMatch[1].replace(/,/g, ''), 10);
+    }
+
+    return null;
 }
 
 function startVisualCountdown(durationMs) {
