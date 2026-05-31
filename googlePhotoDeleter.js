@@ -8,6 +8,7 @@ let currentStatusText = "Initializing...";
 let countdownIntervalTimer = null;
 let globalSequenceId = 0;
 let hydrationDirection = 1;
+let hydrationStallCount = 0;
 let wakeLockSentinel = null;
 
 const CONFIG = {
@@ -145,7 +146,10 @@ async function handleNoAvailableTargets() {
 }
 
 async function processDeletionIfBatchSelected(selection) {
+    writeToTerminal(`[Batch] Selection preflight: ${selection.selectedLinks.length} targets selected from link candidates.`, '#8ab4f8');
+
     if (selection.selectedLinks.length === 0) {
+        await recoverFromSelectionDrift();
         return;
     }
 
@@ -154,6 +158,53 @@ async function processDeletionIfBatchSelected(selection) {
     }
 
     await submitBatchDeletion(selection.selectedLinks.length, selection.trackingIds);
+}
+
+async function recoverFromSelectionDrift() {
+    updateStatus('Recovering Viewport...');
+    writeToTerminal('[Recovery] Link selection returned 0. Assuming viewport drift; jumping to top anchor.', '#fcb714', true);
+    const scroller = getHydrationScroller();
+    jumpScrollerToTop(scroller);
+    dispatchHomeToPage();
+    hydrationDirection = 1;
+    hydrationStallCount = 0;
+    forceDeselectAllCurrent();
+    await sleep(Math.max(1200, CONFIG.delays.postClick * 10));
+}
+
+function jumpScrollerToTop(scroller) {
+    if (!scroller || scroller === window || scroller === document || scroller === document.documentElement || scroller === document.body) {
+        window.scrollTo({
+            top: 0,
+            behavior: 'auto'
+        });
+        const scrollingElement = document.scrollingElement || document.documentElement;
+
+        if (scrollingElement) {
+            scrollingElement.scrollTop = 0;
+        }
+
+        return;
+    }
+
+    if (typeof scroller.scrollTo === 'function') {
+        scroller.scrollTo({
+            top: 0,
+            behavior: 'auto'
+        });
+    }
+
+    scroller.scrollTop = 0;
+}
+
+function dispatchHomeToPage() {
+    const eventInit = {
+        key: 'Home',
+        bubbles: true
+    };
+    const event = new KeyboardEvent('keydown', eventInit);
+    window.dispatchEvent(event);
+    document.dispatchEvent(event);
 }
 
 function getAvailablePhotoLinks() {
@@ -460,13 +511,37 @@ async function forceHydrate() {
 
 async function executeHydrationScroll(scroller) {
     const delta = 2500 * hydrationDirection;
+    const beforeScrollPosition = getScrollerPosition(scroller);
     dispatchHydrationWheel(hydrationWheelTarget(scroller), delta);
     scrollHydrationContainer(scroller, delta);
     await sleep(CONFIG.delays.scrollWait);
+    const afterScrollPosition = getScrollerPosition(scroller);
+    evaluateHydrationProgress(scroller, beforeScrollPosition, afterScrollPosition);
 }
 
 function getHydrationScroller() {
-    return document.querySelector(CONFIG.selectors.scrollContainer) || window;
+    const candidates = Array.from(document.querySelectorAll(CONFIG.selectors.scrollContainer));
+    const scrollableCandidates = candidates.filter(isLikelyScrollableElement);
+
+    if (scrollableCandidates.length > 0) {
+        return scrollableCandidates.sort(compareScrollableRange)[0];
+    }
+
+    return document.scrollingElement || document.documentElement || window;
+}
+
+function isLikelyScrollableElement(element) {
+    if (!element || element.offsetParent === null) {
+        return false;
+    }
+
+    return element.scrollHeight - element.clientHeight > 40;
+}
+
+function compareScrollableRange(a, b) {
+    const aRange = a.scrollHeight - a.clientHeight;
+    const bRange = b.scrollHeight - b.clientHeight;
+    return bRange - aRange;
 }
 
 function nudgeLastPhotoIntoFocus() {
@@ -489,9 +564,55 @@ function nudgeLastPhotoIntoFocus() {
 function updateHydrationDirection(scroller) {
     if (isNearBottom(scroller)) {
         hydrationDirection = -1;
+        hydrationStallCount = 0;
     } else if (isNearTop(scroller)) {
         hydrationDirection = 1;
+        hydrationStallCount = 0;
     }
+}
+
+function evaluateHydrationProgress(scroller, beforePosition, afterPosition) {
+    const movement = Math.abs(afterPosition - beforePosition);
+
+    if (movement > 8) {
+        hydrationStallCount = 0;
+        return;
+    }
+
+    if (isNearBottom(scroller)) {
+        hydrationDirection = -1;
+        hydrationStallCount = 0;
+        writeToTerminal('[Nav] Bottom boundary reached. Reversing hydration direction upward.', '#8ab4f8');
+        return;
+    }
+
+    if (isNearTop(scroller)) {
+        hydrationDirection = 1;
+        hydrationStallCount = 0;
+        writeToTerminal('[Nav] Top boundary reached. Reversing hydration direction downward.', '#8ab4f8');
+        return;
+    }
+
+    hydrationStallCount += 1;
+
+    if (hydrationStallCount >= 2) {
+        hydrationDirection *= -1;
+        hydrationStallCount = 0;
+        writeToTerminal('[Nav] Scroll stall detected away from boundaries. Flipping hydration direction.', '#fcb714');
+    }
+}
+
+function getScrollerPosition(scroller) {
+    if (scroller === window) {
+        const metrics = getWindowScrollMetrics();
+        return metrics.scrollTop;
+    }
+
+    if (!scroller) {
+        return 0;
+    }
+
+    return scroller.scrollTop;
 }
 
 function isNearBottom(scroller) {
@@ -515,7 +636,7 @@ function isNearTop(scroller) {
 function getWindowScrollMetrics() {
     const scrollingElement = document.scrollingElement || document.documentElement;
     return {
-        scrollTop: window.scrollY,
+        scrollTop: scrollingElement.scrollTop,
         clientHeight: window.innerHeight,
         scrollHeight: scrollingElement.scrollHeight
     };
@@ -578,6 +699,8 @@ function resetRunState() {
     serverThrottledDelay = 0;
     consecutiveServerFailures = 0;
     globalSequenceId = 0;
+    hydrationDirection = 1;
+    hydrationStallCount = 0;
 }
 
 function unlockDOM() {
