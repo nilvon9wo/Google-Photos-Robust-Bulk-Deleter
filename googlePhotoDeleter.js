@@ -1,14 +1,15 @@
 window.STOP_AUTOMATION = false;
 
 const processedPhotoUrls = new Set();
-let totalDeleted = 0;
 let consecutiveServerFailures = 0;
-let serverThrottledDelay = 0;
-let currentStatusText = "Initializing...";
 let countdownIntervalTimer = null;
+let currentStatusText = "Initializing...";
 let globalSequenceId = 0;
 let hydrationDirection = 'down';
 let hydrationStallCount = 0;
+let lastAnchorId = null;
+let serverThrottledDelay = 0;
+let totalDeleted = 0;
 let wakeLockSentinel = null;
 
 const CONFIG = {
@@ -506,18 +507,15 @@ async function forceHydrate() {
     writeToTerminal('[Nav] Realignment of active layout viewport window tracking...', '#9aa0a6');
     const scroller = getHydrationScroller();
     nudgeLastPhotoIntoFocus();
-    updateHydrationDirection(scroller);
     await executeHydrationScroll(scroller);
 }
 
 async function executeHydrationScroll(scroller) {
     const delta = hydrationScrollDelta();
-    const beforeScrollPosition = getScrollerPosition(scroller);
     dispatchHydrationWheel(hydrationWheelTarget(scroller), delta);
     scrollHydrationContainer(scroller, delta);
     await sleep(CONFIG.delays.scrollWait);
-    const afterScrollPosition = getScrollerPosition(scroller);
-    evaluateHydrationProgress(scroller, beforeScrollPosition, afterScrollPosition);
+    evaluateHydrationProgress(scroller);
 }
 
 function hydrationScrollDelta() {
@@ -568,36 +566,39 @@ function nudgeLastPhotoIntoFocus() {
     lastPhoto.dispatchEvent(arrowDownEvent);
 }
 
-function updateHydrationDirection(scroller) {
-    if (isNearBottom(scroller)) {
-        hydrationDirection = -1;
-        hydrationStallCount = 0;
-    } else if (isNearTop(scroller)) {
-        hydrationDirection = 1;
-        hydrationStallCount = 0;
-    }
-}
+function evaluateHydrationProgress(scroller) {
+    const currentTopEl = getViewportTopElement();
+    const currentTopId = currentTopEl ? currentTopEl.href : 'no-content';
+    if (currentTopId === lastAnchorId) {
+        hydrationStallCount++;
+        writeToTerminal(`[Nav] Stall detected. Count: ${hydrationStallCount}`, '#fcb714');
 
-function evaluateHydrationProgress(scroller, beforePosition, afterPosition) {
-    const movement = Math.abs(afterPosition - beforePosition);
-    if (movement < 8) {
-        writeToTerminal(`[Nav] Hydration stall detected. Movement: ${movement}px. Before: ${beforePosition}px, After: ${afterPosition}px.`); 
-        hydrationStallCount = 0;
-        return;
-    }
-
-    hydrationStallCount += 1;
-    if (hydrationStallCount > 1) {
-        hydrationDirection = hydrationDirection === 'down' 
-            ? 'up' 
-            : 'down';
-        writeToTerminal(`[Nav] Stalled. Direction locked: ${hydrationDirection.toUpperCase()}`, '#fcb714');
-        forceDirectionalNudge(scroller);
-    }
-
-    if (hydrationStallCount > 3) {
+    if (hydrationStallCount > 2) {
         recoverFromPersistentHydrationStall(scroller);
     }
+    else if (hydrationStallCount > 1) {
+            hydrationDirection = (hydrationDirection === 'down') 
+                ? 'up' 
+                : 'down';
+            writeToTerminal(`[Nav] Flipping to: ${hydrationDirection}`, '#81c995', true);
+            hydrationStallCount = 0;
+        }
+    } 
+    else {
+        hydrationStallCount = 0;
+    }
+
+    lastAnchorId = currentTopId;
+}
+
+function getViewportTopElement() {
+    const scroller = getHydrationScroller();
+    const scrollerRect = scroller.getBoundingClientRect();
+    return Array.from(document.querySelectorAll(CONFIG.selectors.photoLink))
+        .find(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.top >= scrollerRect.top && rect.top <= scrollerRect.bottom;
+        });
 }
 
 function recoverFromPersistentHydrationStall(scroller) {
@@ -615,37 +616,6 @@ function forceDirectionalNudge(scroller) {
         : 1800;
     dispatchHydrationWheel(hydrationWheelTarget(scroller), nudgeDelta);
     scrollHydrationContainer(scroller, nudgeDelta);
-}
-
-function getScrollerPosition(scroller) {
-    if (scroller === window) {
-        const metrics = getWindowScrollMetrics();
-        return metrics.scrollTop;
-    }
-
-    if (!scroller) {
-        return 0;
-    }
-
-    return scroller.scrollTop;
-}
-
-function isNearBottom(scroller) {
-    if (scroller === window) {
-        const metrics = getWindowScrollMetrics();
-        return metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - 100;
-    }
-
-    return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 100;
-}
-
-function isNearTop(scroller) {
-    if (scroller === window) {
-        const metrics = getWindowScrollMetrics();
-        return metrics.scrollTop <= 100;
-    }
-
-    return scroller.scrollTop <= 100;
 }
 
 function getWindowScrollMetrics() {
@@ -716,6 +686,7 @@ function resetRunState() {
     globalSequenceId = 0;
     hydrationDirection = 'down';
     hydrationStallCount = 0;
+    lastAnchorId = getViewportTopElement()?.href || 'no-content';
 }
 
 function unlockDOM() {
