@@ -19,7 +19,8 @@ So this script was built and iterated specifically to keep working in hostile re
 
 - Injects an on-page control dashboard (HUD) with:
 - Live engine status
-- Total deleted counter
+- Total deleted counter with discovered total estimate (shows `(est)` when heuristic)
+- Sync controls (`Never wait` toggle and per-cycle skip button)
 - Cooldown panel with countdown timer
 - Batch audit ledger (selected/submitted/result)
 - Scrollable terminal-style event log
@@ -35,6 +36,7 @@ So this script was built and iterated specifically to keep working in hostile re
 - Periodically re-hydrates the viewport (scroll/navigation nudges) to force lazy-loaded content to appear.
 - Removes certain UI lock attributes (aria-hidden/inert) that can block interaction.
 - Requests a Screen Wake Lock so the computer does not fall asleep during long unattended runs.
+- Uses active-run tokens so re-pasting the script supersedes and stops the previous run.
 
 ## Feature Details
 
@@ -44,7 +46,8 @@ The script creates a fixed, dark panel in the top-left with:
 
 - STOP AUTOMATION button
 - Engine status text
-- Total files purged counter
+- Total files purged counter (for example: `150 / 2012 (est)`)
+- Sync wait controls (`Never wait` and dynamic `Skip N Moving Statements`)
 - Cooldown interval + remaining time
 - Live batch ledger (most recent first)
 - Console log feed with timestamps
@@ -85,13 +88,23 @@ After submit, the script waits for ongoing movement indicators to clear before c
 
 - Watches page text for moving-to-trash messages
 - Requires multiple clean scans before declaring sync complete
+- Lets you bypass the current wait cycle with a skip button
+- Lets you disable waits for future cycles using `Never wait`
 - Hard timeout ceiling of 20 minutes for a wait cycle
 
-### 6) Layout Hydration / Discovery Movement
+### 6) Run Isolation (Safe Re-paste Behavior)
+
+The script uses run tokens on `window` so only the newest pasted run remains active.
+
+- A newly pasted run marks the previous run for stop.
+- Sleep/wait paths are abort-aware, so old loops unwind quickly.
+- Manual stop targets the active run token instead of relying only on a global boolean.
+
+### 7) Layout Hydration / Discovery Movement
 
 The script forces controlled scrolling and directional reversal near top/bottom boundaries to keep lazy-loaded content flowing into the DOM.
 
-### 7) Screen Wake Lock
+### 8) Screen Wake Lock
 
 The script requests a Screen Wake Lock via the standard W3C `navigator.wakeLock` API (available in Chrome 84+). This prevents the operating system from sleeping the display during long unattended runs — no separate utility or YouTube video required.
 
@@ -100,6 +113,16 @@ The script requests a Screen Wake Lock via the standard W3C `navigator.wakeLock`
 - If the API is unavailable (older browser, or a plain HTTP page), a warning is logged to the HUD terminal and the script continues without it.
 
 Note: the lock is tied to the tab being *visible*, not just open. Switching to another browser window is fine. Minimizing the Google Photos window will release the lock until you restore it.
+
+### 9) Server Strain Detection Scope (Important)
+
+The passive strain monitor currently wraps `window.fetch` in the page context.
+
+- It does react to failed fetch responses such as 429/503/504 and other 5xx.
+- It does trigger exponential cooldown when those responses are seen through that fetch path.
+- It may not see every failing request visible in DevTools (for example, some worker/XHR/internal traffic).
+
+Google Photos likely has its own internal retry and recovery behavior. That behavior is opaque and may change, so this script treats Google-side recovery as best effort and still applies conservative backoff on signals it can observe.
 
 ## Safety, Behavior, and Limits
 
@@ -160,8 +183,10 @@ The CONFIG object exposes the main tuning points:
 
 Also notable runtime state:
 
-- MAX_BATCH (currently 50)
-- HARD_MAX_TIMEOUT for sync wait (20 minutes)
+- `CONFIG.batch.maxSize` (currently 50)
+- Sync wait hard timeout (20 minutes)
+- `syncNeverWait` and per-cycle `syncSkipRequested` (controlled from HUD)
+- Run tokens for active/superseded stop behavior
 
 ## Status Labels You May See
 
@@ -185,6 +210,11 @@ These are per-item ledger states and help diagnose what happened during each bat
 
 - Repeated cooldowns:
 - Backend is likely throttling. Let it recover; the script will resume.
+
+- You can see 504 in DevTools, but no cooldown message appears:
+- The request may not have passed through this script's wrapped `window.fetch` path.
+- Google Photos may be retrying internally before your automation path sees a strain signal.
+- Treat this as a visibility limitation, not proof that backoff was removed.
 
 - Script appears idle:
 - It may be in sync wait mode or hydration wait mode; check status and terminal panel.
