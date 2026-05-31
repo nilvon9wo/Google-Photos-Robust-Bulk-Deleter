@@ -4,10 +4,8 @@ const processedPhotoUrls = new Set();
 let consecutiveServerFailures = 0;
 let countdownIntervalTimer = null;
 let currentStatusText = "Initializing...";
+let deltaY = 2500;
 let globalSequenceId = 0;
-let hydrationDirection = 'down';
-let hydrationStallCount = 0;
-let lastAnchorId = null;
 let serverThrottledDelay = 0;
 let totalDeleted = 0;
 let wakeLockSentinel = null;
@@ -37,7 +35,8 @@ const CONFIG = {
     }
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) => new Promise((resolve) => 
+    setTimeout(resolve, ms));
 
 const ACTIVE_RUN_TOKEN = `gprbd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 window.__GPRBD_ACTIVE_RUN_TOKEN = ACTIVE_RUN_TOKEN;
@@ -53,7 +52,8 @@ async function start() {
         try {
             await processSingleCycle();
         } catch (error) {
-            await handleCycleException(error);
+            writeToTerminal(`⚠️ Pipeline Exception Handled: ${error.message}`, '#ff3333');
+            await sleep(3000);            
         } finally {
             if (shouldAbortRun()) {
                 forceDeselectAllCurrent();
@@ -175,8 +175,6 @@ async function recoverFromSelectionDrift() {
     const scroller = getHydrationScroller();
     jumpScrollerToTop(scroller);
     dispatchHomeToPage();
-    hydrationDirection = 'down';
-    hydrationStallCount = 0;
     forceDeselectAllCurrent();
     await sleep(Math.max(1200, CONFIG.delays.postClick * 10));
 }
@@ -187,15 +185,22 @@ function jumpScrollerToTop(scroller) {
         : scroller;
     
     target.scrollTop = 0;
+    void target.offsetHeight; 
     target.dispatchEvent(new Event('scroll', { 
         bubbles: true 
     }));
-    
+        
+    target.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: 0,
+        bubbles: true,
+        cancelable: true
+    }));
+
     document.dispatchEvent(new KeyboardEvent('keydown', { 
         key: 'Home', 
         bubbles: true 
     }));
-    
+
     writeToTerminal('[Recovery] Jumped to top and triggered scroll sync.', '#ff3333');
 }
 
@@ -378,8 +383,8 @@ async function handleMissingDeleteButton(trackingIds) {
         key: 'Escape',
         bubbles: true
     };
-    const escapeEvent = new KeyboardEvent('keydown', escapeEventInit);
-    window.dispatchEvent(escapeEvent);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', escapeEventInit));
     await sleep(2000);
 }
 
@@ -507,21 +512,20 @@ async function forceHydrate() {
     writeToTerminal('[Nav] Realignment of active layout viewport window tracking...', '#9aa0a6');
     const scroller = getHydrationScroller();
     nudgeLastPhotoIntoFocus();
-    await executeHydrationScroll(scroller);
-}
-
-async function executeHydrationScroll(scroller) {
-    const delta = hydrationScrollDelta();
-    dispatchHydrationWheel(hydrationWheelTarget(scroller), delta);
-    scrollHydrationContainer(scroller, delta);
+    scrollHydrationContainer(scroller);
     await sleep(CONFIG.delays.scrollWait);
-    evaluateHydrationProgress(scroller);
 }
 
-function hydrationScrollDelta() {
-    return hydrationDirection === 'up' 
-        ? -2500 
-        : 2500;
+function scrollHydrationContainer(scroller) {
+    if (scroller.scrollBy) {
+        scroller.scrollBy(0, deltaY);
+        return;
+    }
+
+    target.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: deltaY,
+        bubbles: true
+    }));
 }
 
 function getHydrationScroller() {
@@ -562,88 +566,8 @@ function nudgeLastPhotoIntoFocus() {
         key: 'ArrowDown',
         bubbles: true
     };
-    const arrowDownEvent = new KeyboardEvent('keydown', arrowDownEventInit);
-    lastPhoto.dispatchEvent(arrowDownEvent);
-}
 
-function evaluateHydrationProgress(scroller) {
-    const currentTopEl = getViewportTopElement();
-    const currentTopId = currentTopEl ? currentTopEl.href : 'no-content';
-    if (currentTopId === lastAnchorId) {
-        hydrationStallCount++;
-        writeToTerminal(`[Nav] Stall detected. Count: ${hydrationStallCount}`, '#fcb714');
-
-    if (hydrationStallCount > 2) {
-        recoverFromPersistentHydrationStall(scroller);
-    }
-    else if (hydrationStallCount > 1) {
-            hydrationDirection = (hydrationDirection === 'down') 
-                ? 'up' 
-                : 'down';
-            writeToTerminal(`[Nav] Flipping to: ${hydrationDirection}`, '#81c995', true);
-            hydrationStallCount = 0;
-        }
-    } 
-    else {
-        hydrationStallCount = 0;
-    }
-
-    lastAnchorId = currentTopId;
-}
-
-function getViewportTopElement() {
-    const scroller = getHydrationScroller();
-    const scrollerRect = scroller.getBoundingClientRect();
-    return Array.from(document.querySelectorAll(CONFIG.selectors.photoLink))
-        .find(el => {
-            const rect = el.getBoundingClientRect();
-            return rect.top >= scrollerRect.top && rect.top <= scrollerRect.bottom;
-        });
-}
-
-function recoverFromPersistentHydrationStall(scroller) {
-    writeToTerminal('[Nav] Repeated back-to-back stalls detected. Resetting to top and restarting downward sweep.', '#ff3333', true);
-    jumpScrollerToTop(scroller);
-    dispatchHomeToPage();
-    hydrationDirection = 'down';
-    hydrationStallCount = 0;
-    forceDeselectAllCurrent();
-}
-
-function forceDirectionalNudge(scroller) {
-    const nudgeDelta = hydrationDirection === 'up' 
-        ? -1800 
-        : 1800;
-    dispatchHydrationWheel(hydrationWheelTarget(scroller), nudgeDelta);
-    scrollHydrationContainer(scroller, nudgeDelta);
-}
-
-function getWindowScrollMetrics() {
-    const scrollingElement = document.scrollingElement || document.documentElement;
-    return {
-        scrollTop: scrollingElement.scrollTop,
-        clientHeight: window.innerHeight,
-        scrollHeight: scrollingElement.scrollHeight
-    };
-}
-
-function hydrationWheelTarget(scroller) {
-    return scroller === window ? document.body : scroller;
-}
-
-function dispatchHydrationWheel(target, delta) {
-    const wheelEventInit = {
-        deltaY: delta,
-        bubbles: true
-    };
-    const wheelEvent = new WheelEvent('wheel', wheelEventInit);
-    target.dispatchEvent(wheelEvent);
-}
-
-function scrollHydrationContainer(scroller, delta) {
-    if (scroller.scrollBy) {
-        scroller.scrollBy(0, delta);
-    }
+    lastPhoto.dispatchEvent(new KeyboardEvent('keydown', arrowDownEventInit));
 }
 
 function cleanupAfterStop() {
@@ -674,19 +598,11 @@ function hideCooldownPanel() {
     }
 }
 
-function handleCycleException(error) {
-    writeToTerminal(`⚠️ Pipeline Exception Handled: ${error.message}`, '#ff3333');
-    return sleep(3000);
-}
-
 function resetRunState() {
     window.STOP_AUTOMATION = false;
     serverThrottledDelay = 0;
     consecutiveServerFailures = 0;
     globalSequenceId = 0;
-    hydrationDirection = 'down';
-    hydrationStallCount = 0;
-    lastAnchorId = getViewportTopElement()?.href || 'no-content';
 }
 
 function unlockDOM() {
@@ -733,8 +649,7 @@ async function optimizeZoom() {
         key: 'PageDown',
         bubbles: true
     };
-    const pageDownEvent = new KeyboardEvent('keydown', pageDownEventInit);
-    zoomSlider.dispatchEvent(pageDownEvent);
+    zoomSlider.dispatchEvent(new KeyboardEvent('keydown', pageDownEventInit));
     await sleep(1500);
 }
 
@@ -1422,7 +1337,8 @@ function getTimestamp() {
         minute: '2-digit',
         second: '2-digit'
     };
-    return new Date().toLocaleTimeString([], options);
+    return new Date()
+        .toLocaleTimeString([], options);
 }
 
 function createElement(tagName, options = {}) {
