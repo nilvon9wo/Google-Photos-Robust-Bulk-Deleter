@@ -37,15 +37,42 @@ const CONFIG = {
     }
 };
 
-const sleep = (ms) => new Promise((resolve) => 
-    setTimeout(resolve, ms));
+const sleep = (ms) => new Promise((resolve) => {
+    const startedAt = Date.now();
+
+    function tick() {
+        if (typeof shouldAbortRun === 'function' && shouldAbortRun()) {
+            resolve();
+            return;
+        }
+
+        const elapsed = Date.now() - startedAt;
+        const remaining = ms - elapsed;
+
+        if (remaining <= 0) {
+            resolve();
+            return;
+        }
+
+        setTimeout(tick, Math.min(remaining, 200));
+    }
+
+    tick();
+});
+
+const PREVIOUS_RUN_TOKEN = window.__GPRBD_ACTIVE_RUN_TOKEN || null;
+if (PREVIOUS_RUN_TOKEN) {
+    window.__GPRBD_STOP_RUN_TOKEN = PREVIOUS_RUN_TOKEN;
+    window.STOP_AUTOMATION = true;
+}
 
 const ACTIVE_RUN_TOKEN = `gprbd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 window.__GPRBD_ACTIVE_RUN_TOKEN = ACTIVE_RUN_TOKEN;
 
 function shouldAbortRun() {
     const supersededByNewerRun = window.__GPRBD_ACTIVE_RUN_TOKEN !== ACTIVE_RUN_TOKEN;
-    return window.STOP_AUTOMATION || supersededByNewerRun;
+    const manuallyStoppedThisRun = window.__GPRBD_STOP_RUN_TOKEN === ACTIVE_RUN_TOKEN;
+    return supersededByNewerRun || manuallyStoppedThisRun;
 }
 
 async function start() {
@@ -206,8 +233,13 @@ async function restart() {
 }
 
 async function jumpScrollerToTop(scroller) {
-    writeToTerminal(`[Restart] Resetting ${actualScroller.tagName} position...`, '#ff3333');
     const actualScroller = getActualScroller();
+    if (!actualScroller) {
+        writeToTerminal('[Restart] No resettable scroller found. Skipping top reset.', '#fcb714');
+        return;
+    }
+
+    writeToTerminal(`[Restart] Resetting ${actualScroller.tagName} position...`, '#ff3333');
 
     actualScroller.scrollTop = 0;
     const internalContainer = actualScroller.querySelector('[style*="transform"]');
@@ -573,6 +605,9 @@ function scrollHydrationContainer(scroller) {
         return;
     }
 
+    const target = scroller === window 
+        ? document.body 
+        : scroller;
     target.dispatchEvent(new WheelEvent('wheel', {
         deltaY: deltaY,
         bubbles: true
@@ -650,10 +685,13 @@ function hideCooldownPanel() {
 }
 
 function resetRunState() {
-    window.STOP_AUTOMATION = false;
     serverThrottledDelay = 0;
     consecutiveServerFailures = 0;
     globalSequenceId = 0;
+
+    if (window.__GPRBD_STOP_RUN_TOKEN === ACTIVE_RUN_TOKEN) {
+        window.__GPRBD_STOP_RUN_TOKEN = null;
+    }
 }
 
 function unlockDOM() {
@@ -978,6 +1016,7 @@ function createStopButton() {
 }
 
 function handleManualStopRequest() {
+    window.__GPRBD_STOP_RUN_TOKEN = ACTIVE_RUN_TOKEN;
     window.STOP_AUTOMATION = true;
     updateStatus('Shutting Down...');
     writeToTerminal('🛑 Stop sequence pulled manually. Ending loops...', '#ff3333', true);
@@ -1006,24 +1045,14 @@ function createSyncWaitControlRow() {
         id: 'hud-sync-wait-controls',
         style: 'margin-top:8px;margin-bottom:6px;display:flex;align-items:center;gap:10px;'
     });
+    appendChildren(row, [
+        createNeverWaitCheckbox(), 
+        createSkipButton()
+    ]);
+    return row;
+}
 
-    const skipButton = createElement('button', {
-        id: 'hud-sync-skip-btn',
-        text: 'Skip 3 Moving Statements',
-        style: joinCssRules([
-            'display:none',
-            'background:#fcb714',
-            'color:#202124',
-            'border:none',
-            'border-radius:6px',
-            'padding:12px',
-            'font-size:11px',
-            'font-weight:bold',
-            'cursor:pointer'
-        ])
-    });
-    skipButton.onclick = handleSyncSkipButtonPressed;
-
+function createNeverWaitCheckbox() {
     const neverWaitWrap = createElement('label', {
         style: 'display:flex;align-items:center;gap:6px;font-size:16px;color:#fcb714;cursor:pointer;user-select:none;'
     });
@@ -1037,10 +1066,29 @@ function createSyncWaitControlRow() {
     const neverWaitText = createElement('span', {
         text: 'Never wait'
     });
-
     appendChildren(neverWaitWrap, [neverWaitCheckbox, neverWaitText]);
-    appendChildren(row, [skipButton, neverWaitWrap]);
-    return row;
+    return neverWaitWrap;
+}
+
+function createSkipButton() {
+    const skipButton = createElement('button', {
+        id: 'hud-sync-skip-btn',
+        text: 'Skip 3 Moving Statements',
+        style: joinCssRules([
+            'display:none',
+            'background:#fcb714',
+            'color:#202124',
+            'border:none',
+            'border-radius:6px',
+            'margin-left:20px',
+            'padding:12px',
+            'font-size:14px',
+            'font-weight:bold',
+            'cursor:pointer'
+        ])
+    });
+    skipButton.onclick = handleSyncSkipButtonPressed;
+    return skipButton;
 }
 
 function setSyncWaitUiState(isActive, remainingStatements) {
