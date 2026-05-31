@@ -192,11 +192,18 @@ These are per-item ledger states and help diagnose what happened during each bat
 - Wake lock warning appears in the HUD terminal:
 - Your browser does not support the Screen Wake Lock API, or the page is served over plain HTTP instead of HTTPS. Use a current version of Chrome and ensure the page URL begins with `https://`. As a fallback, keep a video playing in another tab to prevent system sleep.
 
-- Never starts deleting files or strange errors:
-- Something may be full or corrupt in the Google Photos single page application.  To fix:
-    1. In your browser's developer's tools, click "Application" -> "Clear site data".
-    2. Use Clear Cache browser extension to clear the cache; or
-    3. Reload the page.
+- Sync wait stays above about 2 minutes for multiple batches (especially after batch 1), or
+- The script never starts deleting, or
+- You see repeated strange UI/runtime errors.
+- Likely cause:
+- Google Photos site data or cache is stale/corrupted, and the single-page app is in a bad state.
+- To fix:
+    1. Open DevTools, go to Application, then click Clear site data.
+    2. Reload Google Photos with a hard refresh.
+    3. If issues continue, clear browser cache for photos.google.com (or use your cache extension), then reload again.
+    4. Restart the script.
+- Note:
+- The first sync cycle can be slower than later cycles. Treat it as a problem only if the delay repeats across multiple batches.
 
 ## Disclaimer
 

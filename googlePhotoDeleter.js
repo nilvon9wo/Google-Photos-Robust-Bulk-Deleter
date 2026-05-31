@@ -7,7 +7,7 @@ let serverThrottledDelay = 0;
 let currentStatusText = "Initializing...";
 let countdownIntervalTimer = null;
 let globalSequenceId = 0;
-let hydrationDirection = 1;
+let hydrationDirection = 'down';
 let hydrationStallCount = 0;
 let wakeLockSentinel = null;
 
@@ -38,15 +38,23 @@ const CONFIG = {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const ACTIVE_RUN_TOKEN = `gprbd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+window.__GPRBD_ACTIVE_RUN_TOKEN = ACTIVE_RUN_TOKEN;
+
+function shouldAbortRun() {
+    const supersededByNewerRun = window.__GPRBD_ACTIVE_RUN_TOKEN !== ACTIVE_RUN_TOKEN;
+    return window.STOP_AUTOMATION || supersededByNewerRun;
+}
+
 async function start() {
     await initializeRun();
-    while (!window.STOP_AUTOMATION) {
+    while (!shouldAbortRun()) {
         try {
             await processSingleCycle();
         } catch (error) {
             await handleCycleException(error);
         } finally {
-            if (window.STOP_AUTOMATION) {
+            if (shouldAbortRun()) {
                 forceDeselectAllCurrent();
             }
         }
@@ -95,7 +103,7 @@ function installVisibilityChangeHandler() {
 
 async function onPageVisibilityChanged() {
     const isVisible = document.visibilityState === 'visible';
-    const isRunning = !window.STOP_AUTOMATION;
+    const isRunning = !shouldAbortRun();
     const needsWakeLock = !wakeLockSentinel;
 
     if (isVisible && isRunning && needsWakeLock) {
@@ -153,7 +161,7 @@ async function processDeletionIfBatchSelected(selection) {
         return;
     }
 
-    if (window.STOP_AUTOMATION) {
+    if (shouldAbortRun()) {
         return;
     }
 
@@ -166,35 +174,28 @@ async function recoverFromSelectionDrift() {
     const scroller = getHydrationScroller();
     jumpScrollerToTop(scroller);
     dispatchHomeToPage();
-    hydrationDirection = 1;
+    hydrationDirection = 'down';
     hydrationStallCount = 0;
     forceDeselectAllCurrent();
     await sleep(Math.max(1200, CONFIG.delays.postClick * 10));
 }
 
 function jumpScrollerToTop(scroller) {
-    if (!scroller || scroller === window || scroller === document || scroller === document.documentElement || scroller === document.body) {
-        window.scrollTo({
-            top: 0,
-            behavior: 'auto'
-        });
-        const scrollingElement = document.scrollingElement || document.documentElement;
-
-        if (scrollingElement) {
-            scrollingElement.scrollTop = 0;
-        }
-
-        return;
-    }
-
-    if (typeof scroller.scrollTo === 'function') {
-        scroller.scrollTo({
-            top: 0,
-            behavior: 'auto'
-        });
-    }
-
-    scroller.scrollTop = 0;
+    const target = (scroller === window) 
+        ? (document.scrollingElement || document.documentElement) 
+        : scroller;
+    
+    target.scrollTop = 0;
+    target.dispatchEvent(new Event('scroll', { 
+        bubbles: true 
+    }));
+    
+    document.dispatchEvent(new KeyboardEvent('keydown', { 
+        key: 'Home', 
+        bubbles: true 
+    }));
+    
+    writeToTerminal('[Recovery] Jumped to top and triggered scroll sync.', '#ff3333');
 }
 
 function dispatchHomeToPage() {
@@ -228,7 +229,7 @@ async function selectBatchLinks(batchCandidates) {
     const trackingIds = [];
 
     for (const link of batchCandidates) {
-        if (window.STOP_AUTOMATION) {
+        if (shouldAbortRun()) {
             break;
         }
 
@@ -417,7 +418,7 @@ async function runSyncGate(batchTrackingIds) {
 }
 
 async function runSingleSyncScan(batchTrackingIds, startTime, consecutiveClearScans) {
-    if (window.STOP_AUTOMATION) {
+    if (shouldAbortRun()) {
         return {
             exit: true,
             consecutiveClearScans
@@ -510,13 +511,19 @@ async function forceHydrate() {
 }
 
 async function executeHydrationScroll(scroller) {
-    const delta = 2500 * hydrationDirection;
+    const delta = hydrationScrollDelta();
     const beforeScrollPosition = getScrollerPosition(scroller);
     dispatchHydrationWheel(hydrationWheelTarget(scroller), delta);
     scrollHydrationContainer(scroller, delta);
     await sleep(CONFIG.delays.scrollWait);
     const afterScrollPosition = getScrollerPosition(scroller);
     evaluateHydrationProgress(scroller, beforeScrollPosition, afterScrollPosition);
+}
+
+function hydrationScrollDelta() {
+    return hydrationDirection === 'up' 
+        ? -2500 
+        : 2500;
 }
 
 function getHydrationScroller() {
@@ -573,33 +580,41 @@ function updateHydrationDirection(scroller) {
 
 function evaluateHydrationProgress(scroller, beforePosition, afterPosition) {
     const movement = Math.abs(afterPosition - beforePosition);
-
-    if (movement > 8) {
+    if (movement < 8) {
+        writeToTerminal(`[Nav] Hydration stall detected. Movement: ${movement}px. Before: ${beforePosition}px, After: ${afterPosition}px.`); 
         hydrationStallCount = 0;
-        return;
-    }
-
-    if (isNearBottom(scroller)) {
-        hydrationDirection = -1;
-        hydrationStallCount = 0;
-        writeToTerminal('[Nav] Bottom boundary reached. Reversing hydration direction upward.', '#8ab4f8');
-        return;
-    }
-
-    if (isNearTop(scroller)) {
-        hydrationDirection = 1;
-        hydrationStallCount = 0;
-        writeToTerminal('[Nav] Top boundary reached. Reversing hydration direction downward.', '#8ab4f8');
         return;
     }
 
     hydrationStallCount += 1;
-
-    if (hydrationStallCount >= 2) {
-        hydrationDirection *= -1;
-        hydrationStallCount = 0;
-        writeToTerminal('[Nav] Scroll stall detected away from boundaries. Flipping hydration direction.', '#fcb714');
+    if (hydrationStallCount > 1) {
+        hydrationDirection = hydrationDirection === 'down' 
+            ? 'up' 
+            : 'down';
+        writeToTerminal(`[Nav] Stalled. Direction locked: ${hydrationDirection.toUpperCase()}`, '#fcb714');
+        forceDirectionalNudge(scroller);
     }
+
+    if (hydrationStallCount > 3) {
+        recoverFromPersistentHydrationStall(scroller);
+    }
+}
+
+function recoverFromPersistentHydrationStall(scroller) {
+    writeToTerminal('[Nav] Repeated back-to-back stalls detected. Resetting to top and restarting downward sweep.', '#ff3333', true);
+    jumpScrollerToTop(scroller);
+    dispatchHomeToPage();
+    hydrationDirection = 'down';
+    hydrationStallCount = 0;
+    forceDeselectAllCurrent();
+}
+
+function forceDirectionalNudge(scroller) {
+    const nudgeDelta = hydrationDirection === 'up' 
+        ? -1800 
+        : 1800;
+    dispatchHydrationWheel(hydrationWheelTarget(scroller), nudgeDelta);
+    scrollHydrationContainer(scroller, nudgeDelta);
 }
 
 function getScrollerPosition(scroller) {
@@ -699,7 +714,7 @@ function resetRunState() {
     serverThrottledDelay = 0;
     consecutiveServerFailures = 0;
     globalSequenceId = 0;
-    hydrationDirection = 1;
+    hydrationDirection = 'down';
     hydrationStallCount = 0;
 }
 
@@ -1387,13 +1402,17 @@ function writeToTerminal(message, hexColor = '#e8eaed', isBold = false) {
 
 function createTerminalEntry(message, hexColor, isBold) {
     const line = createElement('div', {
-        style: terminalLineStyle(hexColor, isBold)
+        style: terminalLineStyle(hexColor, isBold),
+        title: message
     });
     const time = createElement('span', {
         style: terminalTimeStyle(),
         text: `[${getTimestamp()}]`
     });
-    const text = createElement('span', { text: message });
+    const text = createElement('span', {
+        text: message,
+        title: message
+    });
     appendChildren(line, [time, text]);
     return line;
 }
