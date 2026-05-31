@@ -156,52 +156,77 @@ async function handleNoAvailableTargets() {
 
 async function processDeletionIfBatchSelected(selection) {
     writeToTerminal(`[Batch] Selection preflight: ${selection.selectedLinks.length} targets selected from link candidates.`, '#8ab4f8');
+    await submitBatchDeletion(selection.selectedLinks.length, selection.trackingIds);
 
-    if (selection.selectedLinks.length === 0) {
-        await recoverFromSelectionDrift();
+    if (isAtEndOfGallery() || hasNoLinksSelected(selection)) {
+        await restart();
         return;
     }
 
     if (shouldAbortRun()) {
         return;
     }
-
-    await submitBatchDeletion(selection.selectedLinks.length, selection.trackingIds);
 }
 
-async function recoverFromSelectionDrift() {
-    updateStatus('Recovering Viewport...');
-    writeToTerminal('[Recovery] Link selection returned 0. Assuming viewport drift; jumping to top anchor.', '#fcb714', true);
+function isAtEndOfGallery() {
     const scroller = getHydrationScroller();
-    jumpScrollerToTop(scroller);
+    if (!scroller) {
+        return false;
+    }
+
+    const total = scroller.scrollHeight;
+    const current = scroller.scrollTop + scroller.clientHeight;
+    if (scroller.scrollTop < 200) {
+        return false;
+    }
+
+    const isAtBottom = (current / total) > 0.99;
+    if (isAtBottom) {
+        writeToTerminal(`[Restart] Bottom detected: ${Math.round(current)}/${total}`, '#fcb714');
+    }
+    return isAtBottom;
+}
+
+function hasNoLinksSelected(selection) {
+    const hasNoLinksSelected = selection.selectedLinks.length === 0;
+    if (hasNoLinksSelected) {
+        writeToTerminal('[Restart] Link selection returned 0. Assuming viewport drift; jumping to top anchor.', '#fcb714', true);
+    }
+    return hasNoLinksSelected;
+}
+
+async function restart() {
+    updateStatus('Restarting...');
+    await jumpScrollerToTop();
     dispatchHomeToPage();
     forceDeselectAllCurrent();
     await sleep(Math.max(1200, CONFIG.delays.postClick * 10));
 }
 
-function jumpScrollerToTop(scroller) {
-    const target = (scroller === window) 
-        ? (document.scrollingElement || document.documentElement) 
-        : scroller;
-    
-    target.scrollTop = 0;
-    void target.offsetHeight; 
-    target.dispatchEvent(new Event('scroll', { 
-        bubbles: true 
-    }));
-        
-    target.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: 0,
-        bubbles: true,
-        cancelable: true
-    }));
+async function jumpScrollerToTop(scroller) {
+    writeToTerminal(`[Restart] Resetting ${actualScroller.tagName} position...`, '#ff3333');
+    const actualScroller = getActualScroller();
 
-    document.dispatchEvent(new KeyboardEvent('keydown', { 
+    actualScroller.scrollTop = 0;
+    const internalContainer = actualScroller.querySelector('[style*="transform"]');
+    if (internalContainer) {
+        internalContainer.style.transform = 'translateY(0px)';
+    }
+
+    actualScroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+    window.dispatchEvent(new Event('resize'));
+    actualScroller.dispatchEvent(new KeyboardEvent('keydown', { 
         key: 'Home', 
+        keyCode: 36, 
         bubbles: true 
     }));
 
-    writeToTerminal('[Recovery] Jumped to top and triggered scroll sync.', '#ff3333');
+    writeToTerminal('[Restart] SPA View Re-initialized at Top.', '#81c995');
+}
+
+function getActualScroller() {
+    return document.querySelector('c-wiz.yDSiEe.uGCjIb') || 
+           document.querySelector('.yDSiEe.uGCjIb');
 }
 
 function dispatchHomeToPage() {
